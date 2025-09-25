@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IUSDT {
+    function transferFrom(address from, address to, uint256 value) external;
+    function balanceOf(address account) external view returns (uint256);
+}
+
+contract HUDMLMUSDT {
+    address public owner;
+    uint256 public packagePrice = 50 * 10**18; // 50 USDT
+    address public usdtToken = 0x55d398326f99059fF775485246999027B3197955; // BEP-20 USDT
+    
+    struct User {
+        address upline;
+        address[] matrixRefs;
+        address[] unilevelRefs;
+        uint256 earnings;
+        bool active;
+    }
+    
+    mapping(address => User) public users;
+    IUSDT public usdt;
+    
+    event Registered(address user, address upline);
+    event MatrixExit(address user, uint256 amount);
+    event Commission(address to, uint256 amount, uint256 level);
+    
+    constructor() { 
+        owner = msg.sender;
+        users[owner].active = true;
+        usdt = IUSDT(usdtToken);
+    }
+    
+    function joinWithUSDT(address upline) external {
+        require(!users[msg.sender].active, "Already joined");
+        require(users[upline].active, "Invalid upline");
+        
+        // USDT transfer from user to contract
+        usdt.transferFrom(msg.sender, address(this), packagePrice);
+        
+        users[msg.sender] = User(upline, new address[](0), new address[](0), 0, true);
+        users[upline].matrixRefs.push(msg.sender);
+        users[upline].unilevelRefs.push(msg.sender);
+        
+        _distributeUSDT(msg.sender, packagePrice);
+        emit Registered(msg.sender, upline);
+    }
+    
+    function _distributeUSDT(address newUser, uint256 amount) private {
+        uint256 companyShare = amount * 10 / 100;
+        uint256 matrixShare = amount * 40 / 100;
+        uint256 unilevelShare = amount * 50 / 100;
+        
+        // Company share
+        usdt.transfer(owner, companyShare);
+        
+        // Matrix logic
+        address upline = users[newUser].upline;
+        if(users[upline].matrixRefs.length >= 5) {
+            usdt.transfer(upline, matrixShare * 2); // 200% return
+            users[upline].earnings += matrixShare * 2;
+            users[upline].matrixRefs = new address[](0);
+            emit MatrixExit(upline, matrixShare * 2);
+        }
+        
+        // Unilevel commissions
+        address current = users[newUser].upline;
+        for(uint256 i=0; i<10 && current != address(0); i++) {
+            if(users[current].unilevelRefs.length > i) {
+                uint256 levelShare = unilevelShare / 10;
+                usdt.transfer(current, levelShare);
+                users[current].earnings += levelShare;
+                emit Commission(current, levelShare, i+1);
+            }
+            current = users[current].upline;
+        }
+    }
+    
+    // Withdraw USDT function
+    function withdrawUSDT(uint256 amount) external {
+        require(msg.sender == owner, "Only owner");
+        usdt.transfer(owner, amount);
+    }
+}
